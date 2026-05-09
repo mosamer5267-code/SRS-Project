@@ -110,3 +110,11 @@ export async function loginRequest(email, password) {
 export async function logoutRequest() {
   return request('/api/auth/logout', { method: 'POST' });
 }
+
+export async function getMyIssuesRequest() {
+  return request('/api/issues/my');
+}
+
+export async function getIssueDetailsRequest(issueId) {
+  return request(`/api/issues/${issueId}`);
+}

@@ -47,3 +47,5 @@ app.listen(PORT, () => {
 
 const updateRoutes = require("./routes/update");
 app.use("/api/issues", updateRoutes);
+const workerRoutes = require('./routes/worker');
+app.use('/api/worker', workerRoutes);

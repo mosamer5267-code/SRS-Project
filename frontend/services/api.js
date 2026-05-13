@@ -115,6 +115,20 @@ export async function getMyIssuesRequest() {
   return request('/api/issues/my');
 }
 
+export async function getIssuesRequest(filters = {}) {
+  const params = new URLSearchParams();
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      params.append(key, String(value).trim());
+    }
+  });
+
+  const query = params.toString();
+
+  return request(`/api/issues${query ? `?${query}` : ''}`);
+}
+
 export async function getIssueDetailsRequest(issueId) {
   return request(`/api/issues/${issueId}`);
 }

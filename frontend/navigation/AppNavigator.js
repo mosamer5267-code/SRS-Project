@@ -8,6 +8,7 @@ import CommunityDashboard from '../screens/CommunityDashboard';
 import ManagerDashboard from '../screens/ManagerDashboard';
 import WorkerDashboard from '../screens/WorkerDashboard';
 import AdminDashboard from '../screens/AdminDashboard';
+import SubmitIssueScreen from '../screens/SubmitIssue/SubmitIssueScreen';
 import MyIssuesScreen from '../screens/MyIssuesScreen';
 import IssueDetailsScreen from '../screens/IssueDetailsScreen';
 import AssignIssueScreen from "../screens/AssignIssueScreen";
@@ -95,6 +96,11 @@ export default function AppNavigator() {
     >
       <Stack.Screen name="CommunityDashboard" options={{ title: 'Community' }}>
         {(props) => (
+          <CommunityDashboard {...props} onLogout={() => setUser(null)} />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="SubmitIssue" options={{ title: 'Submit issue' }}>
+        {(props) => <SubmitIssueScreen {...props} />}
           <CommunityDashboard
             {...props}
             onLogout={() => setUser(null)}

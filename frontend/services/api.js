@@ -1,15 +1,29 @@
 /**
  * API client + AsyncStorage session for CampusCare.
- * Set EXPO_PUBLIC_API_URL in .env (e.g. http://192.168.1.x:3000 for a device, or http://10.0.2.2:3000 for Android emulator).
+ *
+ * Optional: set EXPO_PUBLIC_API_URL in frontend/.env. If unset, uses expo.extra or the dev LAN fallback below.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
 const TOKEN_KEY = '@campuscare_jwt';
 const USER_KEY = '@campuscare_user';
 
-// Normalize base URL so paths like `/api/auth/login` never become `//api/...`
-const rawBase = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
-const API_BASE = String(rawBase).trim().replace(/\/+$/, '');
+function normalizeBaseUrl(url) {
+  if (url == null) return '';
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL ||
+  'http://192.168.100.69:3000';
+
+const API_BASE = normalizeBaseUrl(API_BASE_URL);
+
+export function getApiBaseUrl() {
+  return API_BASE;
+}
 
 export async function saveSession(token, user) {
   if (
@@ -68,7 +82,7 @@ async function request(path, options = {}) {
       (typeof e?.message === 'string' &&
         /network|failed to fetch/i.test(e.message));
     const msg = isNetworkFailure
-      ? `Cannot reach API at ${API_BASE}. Check EXPO_PUBLIC_API_URL and that the backend is running.`
+      ? `Cannot reach API at ${API_BASE}. Check EXPO_PUBLIC_API_URL / your LAN IP, and that the backend is running.`
       : e?.message || 'Network error';
     const err = new Error(msg);
     err.cause = e;
@@ -111,6 +125,15 @@ export async function logoutRequest() {
   return request('/api/auth/logout', { method: 'POST' });
 }
 
+/**
+ * POST /api/issues — requires Bearer token; role must be community_member (server enforced).
+ * Body: { title?, description, category, building, floor?, room?, image_url? }
+ */
+export async function createIssueRequest(payload) {
+  return request('/api/issues', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 export async function getMyIssuesRequest() {
   return request('/api/issues/my');
 }

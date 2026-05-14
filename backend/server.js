@@ -14,22 +14,27 @@
  *   )),
  *   created_at TIMESTAMPTZ DEFAULT NOW()
  * );
+ *
+ * Issues table: run backend/sql/issues_schema.sql once (see Member 2 Submit Issue).
  */
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const authRoutes = require('./routes/authRoutes');
+const issueRoutes = require('./routes/issues');
 const issueRoutes = require('./routes/issueRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+app.use(express.json({ limit: '12mb' }));
 app.use(express.json());
 app.use('/api/issues', issueRoutes);
 
 app.use('/api/auth', authRoutes);
+app.use('/api/issues', issueRoutes);
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'campuscare-api' });

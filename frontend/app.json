@@ -26,6 +26,14 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CampusCare uses your photos so you can attach an image to a facility issue."
+        }
+      ]
+    ]
   }
 }

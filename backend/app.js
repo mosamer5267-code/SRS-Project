@@ -13,8 +13,8 @@ app.use(helmet());
 // ROUTES
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/issues', require('./routes/issueRoutes'));
-app.use('/api/issues', require('./routes/update'));
 app.use('/api/worker', require('./routes/worker'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 
 // HEALTH CHECK
 app.get('/api/health', (req, res) => {

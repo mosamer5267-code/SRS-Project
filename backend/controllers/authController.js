@@ -12,7 +12,41 @@ const ALLOWED_ROLES = [
   'admin',
 ];
 
+function normalizeRole(role) {
+  if (role == null || String(role).trim() === '') return null;
+
+  const cleaned = String(role).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (ALLOWED_ROLES.includes(cleaned)) return cleaned;
+
+  const compact = cleaned.replace(/_/g, '');
+  const aliases = {
+    community: 'community_member',
+    communitymember: 'community_member',
+    facilitymanager: 'facility_manager',
+    manager: 'facility_manager',
+    worker: 'worker',
+    admin: 'admin',
+  };
+
+  return aliases[compact] || null;
+}
+
+function toAuthUser(row) {
+  const role = normalizeRole(row.role);
+  if (!role) {
+    const err = new Error(`Invalid role stored for user: ${row.role}`);
+    err.code = 'INVALID_ROLE';
+    throw err;
+  }
+  return { id: row.id, email: row.email, role };
+}
+
 function signToken(user) {
+  if (!process.env.JWT_SECRET) {
+    const err = new Error('JWT_SECRET is not configured.');
+    err.code = 'JWT_SECRET_MISSING';
+    throw err;
+  }
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role },
     process.env.JWT_SECRET,
@@ -31,17 +65,25 @@ async function register(req, res) {
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required.' });
     }
-    if (password.length < 8) {
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const passwordStr = String(password);
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email and password are required.' });
+    }
+    if (passwordStr.length < 8) {
       return res.status(400).json({ message: 'Password must be at least 8 characters.' });
     }
 
-    const userRole = role || 'community_member';
-    if (!ALLOWED_ROLES.includes(userRole)) {
+    const requestedRole =
+      role != null && String(role).trim() ? String(role).trim() : 'community_member';
+    const userRole = normalizeRole(requestedRole);
+    if (!userRole) {
       return res.status(400).json({ message: 'Invalid role.' });
     }
 
-    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const normalizedEmail = String(email).toLowerCase().trim();
+    const passwordHash = await bcrypt.hash(passwordStr, SALT_ROUNDS);
 
     const result = await db.query(
       `INSERT INTO users (email, password_hash, role)
@@ -50,16 +92,22 @@ async function register(req, res) {
       [normalizedEmail, passwordHash, userRole],
     );
 
-    const user = result.rows[0];
+    const user = toAuthUser(result.rows[0]);
     const token = signToken(user);
 
     return res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, role: user.role },
+      user,
     });
   } catch (err) {
+    if (err.code === 'INVALID_ROLE') {
+      return res.status(500).json({ message: 'Account has an invalid role. Contact support.' });
+    }
     if (err.code === '23505') {
       return res.status(409).json({ message: 'Email already registered.' });
+    }
+    if (err.code === 'JWT_SECRET_MISSING') {
+      return res.status(500).json({ message: 'Server misconfiguration. Contact support.' });
     }
     console.error('register error:', err);
     return res.status(500).json({ message: 'Server error during registration.' });
@@ -79,6 +127,12 @@ async function login(req, res) {
     }
 
     const normalizedEmail = String(email).toLowerCase().trim();
+    const passwordStr = String(password);
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email and password are required.' });
+    }
+
     const result = await db.query(
       `SELECT id, email, password_hash, role FROM users WHERE email = $1`,
       [normalizedEmail],
@@ -89,16 +143,26 @@ async function login(req, res) {
     }
 
     const row = result.rows[0];
-    const ok = await bcrypt.compare(password, row.password_hash);
+    if (!row.password_hash) {
+      return res.status(401).json({ message: 'Invalid email or password.' });
+    }
+
+    const ok = await bcrypt.compare(passwordStr, row.password_hash);
     if (!ok) {
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
 
-    const user = { id: row.id, email: row.email, role: row.role };
+    const user = toAuthUser(row);
     const token = signToken(user);
 
     return res.json({ token, user });
   } catch (err) {
+    if (err.code === 'INVALID_ROLE') {
+      return res.status(500).json({ message: 'Account has an invalid role. Contact support.' });
+    }
+    if (err.code === 'JWT_SECRET_MISSING') {
+      return res.status(500).json({ message: 'Server misconfiguration. Contact support.' });
+    }
     console.error('login error:', err);
     return res.status(500).json({ message: 'Server error during login.' });
   }

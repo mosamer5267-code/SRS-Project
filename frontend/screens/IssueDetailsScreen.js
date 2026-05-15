@@ -75,9 +75,20 @@ export default function IssueDetailsScreen({ route }) {
 
       setErrorMessage('');
 
+      if (!issueId) {
+        setErrorMessage('Missing issue id.');
+        return;
+      }
+
       const response = await getIssueDetailsRequest(issueId);
+      if (__DEV__) {
+        console.log('[IssueDetails] loaded issue', response.data?.id);
+      }
       setIssue(response.data);
     } catch (error) {
+      if (__DEV__) {
+        console.error('[IssueDetails] load failed', error.status, error.message, error.data);
+      }
       setErrorMessage(error.message || 'Could not load issue details.');
     } finally {
       setIsLoading(false);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import LoginScreen from '../screens/LoginScreen';
@@ -12,8 +12,11 @@ import SubmitIssueScreen from '../screens/SubmitIssue/SubmitIssueScreen';
 import MyIssuesScreen from '../screens/MyIssuesScreen';
 import IssueDetailsScreen from '../screens/IssueDetailsScreen';
 import AssignIssueScreen from "../screens/AssignIssueScreen";
+import AssignedIssuesScreen from '../screens/AssignedIssuesScreen';
+import IssueWorkScreen from '../screens/IssueWorkScreen';
+import UserManagementScreen from '../screens/UserManagementScreen';
 
-import { getToken, getStoredUser } from '../services/api';
+import { clearSession, getToken, getStoredUser, normalizeRole } from '../services/api';
 
 const Stack = createNativeStackNavigator();
 
@@ -38,6 +41,9 @@ export default function AppNavigator() {
         const stored = await getStoredUser();
 
         if (!cancelled && token && stored && stored.role) {
+          if (__DEV__) {
+            console.log('[AppNavigator] restored session role:', stored.role);
+          }
           setUser(stored);
         }
       } finally {
@@ -55,12 +61,22 @@ export default function AppNavigator() {
   }, []);
 
   const mainInitialRoute = useMemo(() => {
-    if (!user?.role) {
-      return 'CommunityDashboard';
+    const role = normalizeRole(user?.role);
+    if (!role) {
+      return null;
     }
 
-    return ROLE_TO_SCREEN[user.role] || 'CommunityDashboard';
+    const screen = ROLE_TO_SCREEN[role] || null;
+    if (__DEV__) {
+      console.log('[AppNavigator] initial route for role', role, '→', screen);
+    }
+    return screen;
   }, [user]);
+
+  async function handleInvalidSessionLogout() {
+    await clearSession();
+    setUser(null);
+  }
 
   if (!ready) {
     return (
@@ -88,9 +104,26 @@ export default function AppNavigator() {
     );
   }
 
+  if (!mainInitialRoute) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorTitle}>Invalid account role</Text>
+        <Text style={styles.errorText}>
+          This account does not have a valid CampusCare role. Please sign in with a valid account.
+        </Text>
+        <TouchableOpacity style={styles.errorButton} onPress={handleInvalidSessionLogout}>
+          <Text style={styles.errorButtonText}>Back to sign in</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   // Main app: role decides which dashboard is shown first
+  const navigatorKey = `main-${user.id}-${normalizeRole(user.role) || 'unknown'}`;
+
   return (
     <Stack.Navigator
+      key={navigatorKey}
       initialRouteName={mainInitialRoute}
       screenOptions={{ headerShown: true }}
     >
@@ -101,11 +134,6 @@ export default function AppNavigator() {
       </Stack.Screen>
       <Stack.Screen name="SubmitIssue" options={{ title: 'Submit issue' }}>
         {(props) => <SubmitIssueScreen {...props} />}
-          <CommunityDashboard
-            {...props}
-            onLogout={() => setUser(null)}
-          />
-        )}
       </Stack.Screen>
 
       <Stack.Screen
@@ -138,6 +166,18 @@ export default function AppNavigator() {
         )}
       </Stack.Screen>
 
+      <Stack.Screen
+        name="AssignedIssues"
+        component={AssignedIssuesScreen}
+        options={{ title: 'Assigned Issues' }}
+      />
+
+      <Stack.Screen
+        name="IssueWork"
+        component={IssueWorkScreen}
+        options={{ title: 'Issue Work' }}
+      />
+
       <Stack.Screen name="AdminDashboard" options={{ title: 'Admin' }}>
         {(props) => (
           <AdminDashboard
@@ -146,6 +186,12 @@ export default function AppNavigator() {
           />
         )}
       </Stack.Screen>
+
+      <Stack.Screen
+        name="UserManagement"
+        component={UserManagementScreen}
+        options={{ title: 'User Management' }}
+      />
 
       <Stack.Screen
       name="AssignIssue"
@@ -163,5 +209,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#f5f6fa',
+    padding: 24,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1a1a2e',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 15,
+    color: '#555',
+    marginBottom: 18,
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  errorButton: {
+    backgroundColor: '#2d6cdf',
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  errorButtonText: {
+    color: '#fff',
+    fontWeight: '700',
   },
 });

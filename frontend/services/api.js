@@ -9,6 +9,46 @@ import Constants from 'expo-constants';
 const TOKEN_KEY = '@campuscare_jwt';
 const USER_KEY = '@campuscare_user';
 
+export const ALLOWED_ROLES = [
+  'community_member',
+  'facility_manager',
+  'worker',
+  'admin',
+];
+
+/** Maps API/DB role strings to canonical keys used by AppNavigator. */
+export function normalizeRole(role) {
+  if (role == null || String(role).trim() === '') return null;
+
+  const cleaned = String(role).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (ALLOWED_ROLES.includes(cleaned)) return cleaned;
+
+  const compact = cleaned.replace(/_/g, '');
+  const aliases = {
+    community: 'community_member',
+    communitymember: 'community_member',
+    facilitymanager: 'facility_manager',
+    manager: 'facility_manager',
+    worker: 'worker',
+    admin: 'admin',
+  };
+
+  return aliases[compact] || null;
+}
+
+export function normalizeSessionUser(user) {
+  if (!user || typeof user !== 'object') return null;
+
+  const role = normalizeRole(user.role);
+  if (!role) return null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    role,
+  };
+}
+
 function normalizeBaseUrl(url) {
   if (url == null) return '';
   return String(url).trim().replace(/\/+$/, '');
@@ -26,19 +66,16 @@ export function getApiBaseUrl() {
 }
 
 export async function saveSession(token, user) {
-  if (
-    !token ||
-    typeof token !== 'string' ||
-    !user ||
-    typeof user !== 'object' ||
-    !user.role
-  ) {
+  const sessionUser = normalizeSessionUser(user);
+  if (!token || typeof token !== 'string' || !sessionUser) {
     throw new Error('Invalid session data from server.');
   }
+  await clearSession();
   await AsyncStorage.multiSet([
     [TOKEN_KEY, token],
-    [USER_KEY, JSON.stringify(user)],
+    [USER_KEY, JSON.stringify(sessionUser)],
   ]);
+  return sessionUser;
 }
 
 export async function clearSession() {
@@ -53,7 +90,7 @@ export async function getStoredUser() {
   const raw = await AsyncStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw);
+    return normalizeSessionUser(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -98,27 +135,50 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
+    if (__DEV__) {
+      console.error(`[api] ${options.method || 'GET'} ${path} → ${res.status}`, data);
+    }
     const err = new Error(data.message || `HTTP ${res.status}`);
     err.status = res.status;
     err.data = data;
     throw err;
   }
 
+  if (__DEV__) {
+    console.log(`[api] ${options.method || 'GET'} ${path} → ${res.status}`);
+  }
+
   return data;
 }
 
 export async function registerRequest(email, password, role) {
+  const normalizedEmail = String(email).trim().toLowerCase();
   return request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ email, password, role }),
+    body: JSON.stringify({
+      email: normalizedEmail,
+      password: String(password),
+      role,
+    }),
   });
 }
 
 export async function loginRequest(email, password) {
-  return request('/api/auth/login', {
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const data = await request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({
+      email: normalizedEmail,
+      password: String(password),
+    }),
   });
+
+  const user = normalizeSessionUser(data.user);
+  if (!user) {
+    throw new Error('Login response did not include a valid role.');
+  }
+
+  return { token: data.token, user };
 }
 
 export async function logoutRequest() {
@@ -130,10 +190,19 @@ export async function logoutRequest() {
  * Body: { title?, description, category, building, floor?, room?, image_url? }
  */
 export async function createIssueRequest(payload) {
+  const body = { ...payload };
+  if (body.image_url && String(body.image_url).length > 500_000) {
+    if (__DEV__) {
+      console.warn('[api] image_url too large; submitting without photo');
+    }
+    delete body.image_url;
+  }
   return request('/api/issues', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
+}
+
 export async function getMyIssuesRequest() {
   return request('/api/issues/my');
 }
@@ -153,5 +222,60 @@ export async function getIssuesRequest(filters = {}) {
 }
 
 export async function getIssueDetailsRequest(issueId) {
-  return request(`/api/issues/${issueId}`);
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}`);
+}
+
+export async function getAssignedIssuesRequest() {
+  return request('/api/issues/assigned');
+}
+
+export async function assignIssueRequest(issueId, workerId) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}/assign`, {
+    method: 'PUT',
+    body: JSON.stringify({ workerId }),
+  });
+}
+
+export async function updateIssueStatusRequest(issueId, status) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function closeIssueRequest(issueId) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}/close`, {
+    method: 'PUT',
+  });
+}
+
+export async function addIssueCommentRequest(issueId, comment) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ comment }),
+  });
+}
+
+export async function uploadIssuePhotoRequest(issueId, photoUrl) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}/photo`, {
+    method: 'POST',
+    body: JSON.stringify({ photoUrl }),
+  });
+}
+
+export async function deleteIssueRequest(issueId) {
+  return request(`/api/issues/${encodeURIComponent(String(issueId))}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getAdminUsersRequest() {
+  return request('/api/admin/users');
+}
+
+export async function updateAdminUserStatusRequest(userId, status) {
+  return request(`/api/admin/users/${encodeURIComponent(String(userId))}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status }),
+  });
 }

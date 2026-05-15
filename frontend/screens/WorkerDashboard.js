@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { clearSession, logoutRequest } from '../services/api';
 
-export default function WorkerDashboard({ onLogout }) {
+export default function WorkerDashboard({ navigation, onLogout }) {
   const [loading, setLoading] = useState(false);
 
   async function handleLogout() {
@@ -23,6 +23,12 @@ export default function WorkerDashboard({ onLogout }) {
       <Text style={styles.title}>Worker dashboard</Text>
       <Text style={styles.body}>View and update assigned tasks.</Text>
       <TouchableOpacity
+        style={styles.primaryButton}
+        onPress={() => navigation.navigate('AssignedIssues')}
+      >
+        <Text style={styles.primaryButtonText}>Assigned issues</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
         style={[styles.button, loading && styles.buttonDisabled]}
         onPress={handleLogout}
         disabled={loading}
@@ -41,6 +47,15 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 24, backgroundColor: '#f5f6fa' },
   title: { fontSize: 22, fontWeight: '700', color: '#1a1a2e', marginBottom: 8 },
   body: { fontSize: 16, color: '#555', marginBottom: 24 },
+  primaryButton: {
+    backgroundColor: '#2d6cdf',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    maxWidth: 220,
+    marginBottom: 16,
+  },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   button: {
     backgroundColor: '#c0392b',
     paddingVertical: 14,

@@ -110,9 +110,20 @@ export default function SubmitIssueScreen({ navigation }) {
     setErrors(emptyErrors());
 
     // Demo: send the picker's file URI directly. Backend stores the string; swap for HTTPS after cloud upload.
-    const image_url = localImageUri || undefined;
+    let image_url = localImageUri || undefined;
+    if (image_url && String(image_url).length > 500_000) {
+      image_url = undefined;
+    }
 
     try {
+      if (__DEV__) {
+        console.log('[SubmitIssue] POST /api/issues', {
+          category,
+          building: building.trim(),
+          hasImage: Boolean(image_url),
+        });
+      }
+
       await createIssueRequest({
         title: issueTitle.trim() || undefined,
         description: description.trim(),
@@ -123,13 +134,6 @@ export default function SubmitIssueScreen({ navigation }) {
         image_url,
       });
 
-      Alert.alert('Submitted', 'Your issue was submitted successfully.', [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
-
       setIssueTitle('');
       setDescription('');
       setCategory('');
@@ -137,12 +141,32 @@ export default function SubmitIssueScreen({ navigation }) {
       setFloor('');
       setRoom('');
       clearImage();
+
+      const successMessage = 'Your issue was submitted successfully.';
+      if (Platform.OS === 'web') {
+        window.alert(`Submitted\n\n${successMessage}`);
+        navigation.goBack();
+      } else {
+        Alert.alert('Submitted', successMessage, [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack(),
+          },
+        ]);
+      }
     } catch (e) {
+      if (__DEV__) {
+        console.error('[SubmitIssue] submit failed', e.status, e.message, e.data);
+      }
       const detail =
         e?.data?.errors && Array.isArray(e.data.errors)
           ? e.data.errors.join('\n')
           : e.message || 'Something went wrong.';
-      Alert.alert('Could not submit', detail);
+      if (Platform.OS === 'web') {
+        window.alert(`Could not submit\n\n${detail}`);
+      } else {
+        Alert.alert('Could not submit', detail);
+      }
     } finally {
       setSubmitting(false);
     }

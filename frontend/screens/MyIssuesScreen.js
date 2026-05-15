@@ -88,8 +88,14 @@ export default function MyIssuesScreen({ navigation }) {
       setErrorMessage('');
 
       const response = await getMyIssuesRequest();
+      if (__DEV__) {
+        console.log('[MyIssues] loaded', response.count, 'issues');
+      }
       setIssues(response.data || []);
     } catch (error) {
+      if (__DEV__) {
+        console.error('[MyIssues] load failed', error.status, error.message, error.data);
+      }
       setErrorMessage(error.message || 'Could not load your issues.');
     } finally {
       setIsLoading(false);

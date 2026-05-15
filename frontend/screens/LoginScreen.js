@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { saveSession, loginRequest } from '../services/api';
+import { clearSession, saveSession, loginRequest } from '../services/api';
 
 export default function LoginScreen({ navigation, onAuthSuccess }) {
   const [email, setEmail] = useState('');
@@ -24,9 +24,13 @@ export default function LoginScreen({ navigation, onAuthSuccess }) {
     }
     setLoading(true);
     try {
+      await clearSession();
       const { token, user } = await loginRequest(email.trim(), password);
-      await saveSession(token, user);
-      onAuthSuccess(user);
+      const sessionUser = await saveSession(token, user);
+      if (__DEV__) {
+        console.log('[Login] session role:', sessionUser.role, '→ dashboard route');
+      }
+      onAuthSuccess(sessionUser);
     } catch (e) {
       Alert.alert('Login failed', e.message || 'Please try again.');
     } finally {

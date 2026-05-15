@@ -2,6 +2,9 @@
  * PostgreSQL connection pool (Supabase or any Postgres URL via DATABASE_URL).
  * Supabase: use the "connection string" from Project Settings → Database.
  */
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const { Pool } = require('pg');
 
 const pool = new Pool({

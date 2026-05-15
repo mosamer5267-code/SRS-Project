@@ -1,13 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
@@ -17,17 +16,11 @@ import {
   logoutRequest,
 } from '../services/api';
 
-const STATUS_OPTIONS = ['all', 'Pending', 'In Progress', 'Resolved'];
-const SORT_OPTIONS = [
-  { label: 'Date', value: 'date' },
-  { label: 'Status', value: 'status' },
-  { label: 'Category', value: 'category' },
-];
-
 function formatDate(value) {
   if (!value) return 'No date';
 
   const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'No date';
 
   return date.toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -39,51 +32,19 @@ function formatDate(value) {
 function getStatusStyle(status) {
   const cleanStatus = String(status || '').toLowerCase();
 
-  if (cleanStatus.includes('progress')) {
-    return styles.statusInProgress;
-  }
-
-  if (cleanStatus.includes('resolved') || cleanStatus.includes('closed')) {
-    return styles.statusResolved;
-  }
+  if (cleanStatus.includes('progress')) return styles.statusInProgress;
+  if (cleanStatus.includes('resolved')) return styles.statusResolved;
 
   return styles.statusPending;
 }
 
-function SummaryTile({ label, value }) {
+function IssueCard({ issue, onOpen, onManage }) {
   return (
-    <View style={styles.summaryTile}>
-      <Text style={styles.summaryValue}>{value}</Text>
-      <Text style={styles.summaryLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function FilterChip({ label, selected, onPress }) {
-  return (
-    <Pressable
-      style={[styles.filterChip, selected && styles.filterChipSelected]}
-      onPress={onPress}
-    >
-      <Text
-        style={[
-          styles.filterChipText,
-          selected && styles.filterChipTextSelected,
-        ]}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function IssueCard({ issue, onPress }) {
-  return (
-    <Pressable style={styles.card} onPress={onPress}>
+    <Pressable style={styles.card} onPress={onOpen}>
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleBox}>
           <Text style={styles.category}>{issue.category || 'General'}</Text>
-          <Text style={styles.title} numberOfLines={1}>
+          <Text style={styles.issueTitle} numberOfLines={1}>
             {issue.title || 'Campus Issue'}
           </Text>
         </View>
@@ -98,48 +59,166 @@ function IssueCard({ issue, onPress }) {
       </Text>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>
-          Location: {issue.location || 'Not specified'}
-        </Text>
-        <Text style={styles.footerText}>
-          Reported: {formatDate(issue.createdAt)}
-        </Text>
+        <Text style={styles.footerText}>Location: {issue.location || 'Not specified'}</Text>
+        <Text style={styles.footerText}>Reported: {formatDate(issue.createdAt)}</Text>
+      </View>
+
+      <View style={styles.actionRow}>
+        <TouchableOpacity style={styles.secondaryAction} onPress={onOpen}>
+          <Text style={styles.secondaryActionText}>Details</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.primaryAction} onPress={onManage}>
+          <Text style={styles.primaryActionText}>Manage</Text>
+        </TouchableOpacity>
       </View>
     </Pressable>
   );
 }
 
-export default function ManagerDashboard({ onLogout }) {
-  const [loading, setLoading] = useState(false);
+export default function ManagerDashboard({ navigation, onLogout }) {
+  const [issues, setIssues] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [error, setError] = useState('');
+
+  const counts = useMemo(() => {
+    return issues.reduce(
+      (acc, issue) => {
+        const status = String(issue.status || 'Pending').toLowerCase();
+        acc.total += 1;
+        if (status.includes('progress')) acc.inProgress += 1;
+        else if (status.includes('resolved')) acc.resolved += 1;
+        else acc.pending += 1;
+        return acc;
+      },
+      { total: 0, pending: 0, inProgress: 0, resolved: 0 },
+    );
+  }, [issues]);
+
+  const loadIssues = useCallback(async ({ showSpinner = false } = {}) => {
+    if (showSpinner) setLoading(true);
+    setError('');
+
+    try {
+      const data = await getIssuesRequest();
+      setIssues(Array.isArray(data.data) ? data.data : []);
+    } catch (e) {
+      setError(e.message || 'Could not load issues.');
+    } finally {
+      if (showSpinner) setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIssues({ showSpinner: true });
+  }, [loadIssues]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    await loadIssues();
+  }
 
   async function handleLogout() {
-    setIsLoggingOut(true);
+    setLoggingOut(true);
     try {
       await logoutRequest();
     } catch {
-      // Clear local session even if request fails
+      // Local logout should still succeed if the API is unreachable.
     } finally {
       await clearSession();
       onLogout();
-      setIsLoggingOut(false);
+      setLoggingOut(false);
     }
   }
 
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#2d6cdf" />
+        <Text style={styles.loadingText}>Loading submitted issues...</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Facility manager dashboard</Text>
-      <Text style={styles.body}>Assign and manage maintenance issues.</Text>
-      <TouchableOpacity
-        style={[styles.button, loading && styles.buttonDisabled]}
-        onPress={handleLogout}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Log out</Text>
+    <View style={styles.screen}>
+      <FlatList
+        data={issues}
+        keyExtractor={(item) => String(item.id)}
+        contentContainerStyle={issues.length ? styles.list : styles.emptyList}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
+        ListHeaderComponent={
+          <View>
+            <View style={styles.header}>
+              <View style={styles.headerTextBox}>
+                <Text style={styles.screenTitle}>Facility manager dashboard</Text>
+                <Text style={styles.screenSubtitle}>
+                  Review all submitted campus issues.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.logoutButton, loggingOut && styles.buttonDisabled]}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                {loggingOut ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.logoutText}>Log out</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>{counts.total}</Text>
+                <Text style={styles.summaryLabel}>Total</Text>
+              </View>
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>{counts.pending}</Text>
+                <Text style={styles.summaryLabel}>Pending</Text>
+              </View>
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>{counts.inProgress}</Text>
+                <Text style={styles.summaryLabel}>In progress</Text>
+              </View>
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>{counts.resolved}</Text>
+                <Text style={styles.summaryLabel}>Resolved</Text>
+              </View>
+            </View>
+
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={() => loadIssues({ showSpinner: true })}
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyText}>No submitted issues yet.</Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <IssueCard
+            issue={item}
+            onOpen={() => navigation.navigate('IssueDetails', { issueId: item.id })}
+            onManage={() => navigation.navigate('AssignIssue', { issueId: item.id })}
+          />
         )}
-      </TouchableOpacity>
+      />
     </View>
   );
 }
@@ -168,7 +247,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   screenTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '800',
     color: '#111827',
   },
@@ -201,103 +280,27 @@ const styles = StyleSheet.create({
   },
   summaryTile: {
     flex: 1,
-    minHeight: 70,
+    minHeight: 68,
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     padding: 10,
     justifyContent: 'center',
   },
   summaryValue: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: '#111827',
   },
   summaryLabel: {
     marginTop: 3,
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
-  },
-  filtersPanel: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    padding: 14,
-    marginBottom: 14,
-  },
-  searchInput: {
-    minHeight: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    color: '#111827',
-    paddingHorizontal: 12,
-    fontSize: 14,
-    backgroundColor: '#FFFFFF',
-  },
-  compactInput: {
-    minHeight: 42,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    color: '#111827',
-    paddingHorizontal: 12,
-    fontSize: 14,
-    backgroundColor: '#FFFFFF',
-  },
-  filterSection: {
-    marginTop: 14,
-  },
-  filterLabel: {
-    marginBottom: 8,
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#374151',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  filterChip: {
-    minHeight: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-  },
-  filterChipSelected: {
-    borderColor: '#1D4ED8',
-    backgroundColor: '#DBEAFE',
-  },
-  filterChipText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#374151',
-  },
-  filterChipTextSelected: {
-    color: '#1E3A8A',
-  },
-  clearButton: {
-    alignSelf: 'flex-start',
-    marginTop: 14,
-    minHeight: 38,
-    borderRadius: 10,
-    backgroundColor: '#111827',
-    paddingHorizontal: 14,
-    justifyContent: 'center',
-  },
-  clearButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 10,
     padding: 16,
     marginBottom: 14,
     borderWidth: 1,
@@ -317,7 +320,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 4,
   },
-  title: {
+  issueTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: '#111827',
@@ -338,6 +341,37 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 13,
     color: '#6B7280',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  primaryAction: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 8,
+    backgroundColor: '#2d6cdf',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryActionText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  secondaryAction: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2d6cdf',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryActionText: {
+    color: '#2d6cdf',
+    fontWeight: '700',
   },
   statusBadge: {
     borderRadius: 20,
@@ -372,7 +406,7 @@ const styles = StyleSheet.create({
   errorBox: {
     marginBottom: 14,
     backgroundColor: '#FEE2E2',
-    borderRadius: 14,
+    borderRadius: 10,
     padding: 14,
   },
   errorText: {
@@ -396,7 +430,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonDisabled: { opacity: 0.7 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  emptyText: {
+    color: '#6B7280',
+    fontWeight: '600',
+  },
 });
-

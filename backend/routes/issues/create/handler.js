@@ -18,6 +18,7 @@ const ALLOWED_CATEGORIES = [
 async function createIssue(req, res) {
   try {
     const userId = req.user.id;
+    console.log('[createIssue] POST user_id=%s role=%s', userId, req.user.role);
     const { title, description, category, building, floor, room, image_url } = req.body;
 
     const errors = [];
@@ -83,7 +84,14 @@ async function createIssue(req, res) {
       ],
     );
 
-    return res.status(201).json({ issue: result.rows[0] });
+    const issue = result.rows[0];
+    console.log('[createIssue] created issue id=%s user_id=%s', issue.id, issue.user_id);
+
+    return res.status(201).json({
+      success: true,
+      issue,
+      data: formatIssueRow(issue),
+    });
   } catch (err) {
     if (err.code === '42P01') {
       return res.status(503).json({
@@ -91,9 +99,24 @@ async function createIssue(req, res) {
           'Issues table is missing. Run backend/sql/issues_schema.sql on your database, then retry.',
       });
     }
-    console.error('createIssue error:', err);
+    console.error('createIssue error:', err.message, err.code, err.detail || '');
     return res.status(500).json({ message: 'Server error while creating issue.' });
   }
+}
+
+function formatIssueRow(row) {
+  const parts = [row.building, row.floor, row.room].filter(Boolean);
+  return {
+    id: row.id,
+    title: row.title || `${row.category || 'Campus'} Issue`,
+    description: row.description,
+    category: row.category,
+    location: parts.length ? parts.join(', ') : null,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    photoUrl: row.image_url || null,
+  };
 }
 
 module.exports = {

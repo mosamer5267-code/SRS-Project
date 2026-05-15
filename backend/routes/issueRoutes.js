@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../config/db');
-const { authenticate } = require('../middleware/authMiddleware');
+const { authenticate, requireRole } = require('../middleware/authMiddleware');
+const { createIssue } = require('./issues/create/handler');
 
 const router = express.Router();
 
@@ -8,20 +9,26 @@ function normalizeStatus(status) {
   return status || 'Pending';
 }
 
+function buildLocation(row) {
+  if (row.location) return row.location;
+  const parts = [row.building, row.floor, row.room].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
 function formatIssue(row) {
   return {
-    id: row.issue_id,
+    id: row.id ?? row.issue_id,
     title: row.title || `${row.category || 'Campus'} Issue`,
     description: row.description,
     category: row.category,
-    location: row.location,
+    location: buildLocation(row),
     status: normalizeStatus(row.status),
-    reportedBy: row.reported_by,
-    assignedWorkerId: row.assigned_worker_id,
+    reportedBy: row.user_id ?? row.reported_by,
+    assignedWorkerId: row.assigned_worker_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    resolvedAt: row.resolved_at,
-    photoUrl: row.photo_url || null,
+    resolvedAt: row.resolved_at ?? null,
+    photoUrl: row.image_url ?? row.photo_url ?? null,
   };
 }
 
@@ -29,8 +36,85 @@ function isManagerRole(user) {
   return user.role === 'facility_manager' || user.role === 'admin';
 }
 
+function isMissingColumn(error, columnName) {
+  return error?.code === '42703' && String(error.message || '').includes(columnName);
+}
+
+function missingAssignmentSupport(res) {
+  return res.status(503).json({
+    message:
+      'Issue assignment is not available because the database does not include assigned_worker_id.',
+  });
+}
+
+function missingCommentsSupport(res) {
+  return res.status(503).json({
+    message:
+      'Work comments are not available because the database does not include a comments table.',
+  });
+}
+
+function missingPhotoSupport(res) {
+  return res.status(503).json({
+    message:
+      'Completion photos are not available because photo storage/type tables are not configured.',
+  });
+}
+
 function cleanQueryValue(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeIssueStatus(status) {
+  const cleaned = String(status || '').trim().toLowerCase();
+  const allowed = {
+    pending: 'Pending',
+    'in progress': 'In Progress',
+    in_progress: 'In Progress',
+    resolved: 'Resolved',
+  };
+
+  return allowed[cleaned] || null;
+}
+
+async function getAssignedWorkerId(issueId) {
+  const result = await db.query(
+    'SELECT assigned_worker_id FROM issues WHERE id = $1',
+    [issueId],
+  );
+
+  if (result.rows.length === 0) return null;
+  return result.rows[0].assigned_worker_id;
+}
+
+async function ensureIssueAccess(req, res, issue) {
+  if (isManagerRole(req.user)) return true;
+
+  if (
+    req.user.role === 'community_member' &&
+    String(issue.user_id) === String(req.user.id)
+  ) {
+    return true;
+  }
+
+  if (req.user.role === 'worker') {
+    try {
+      const assignedWorkerId = await getAssignedWorkerId(issue.id);
+      if (String(assignedWorkerId) === String(req.user.id)) {
+        issue.assigned_worker_id = assignedWorkerId;
+        return true;
+      }
+      return false;
+    } catch (error) {
+      if (isMissingColumn(error, 'assigned_worker_id')) {
+        missingAssignmentSupport(res);
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  return false;
 }
 
 function buildIssuesListQuery(query) {
@@ -57,8 +141,10 @@ function buildIssuesListQuery(query) {
       i.title ILIKE $${params.length}
       OR i.description ILIKE $${params.length}
       OR i.category ILIKE $${params.length}
-      OR i.location ILIKE $${params.length}
-      OR CAST(i.issue_id AS TEXT) ILIKE $${params.length}
+      OR i.building ILIKE $${params.length}
+      OR COALESCE(i.floor, '') ILIKE $${params.length}
+      OR COALESCE(i.room, '') ILIKE $${params.length}
+      OR CAST(i.id AS TEXT) ILIKE $${params.length}
     )`);
   }
 
@@ -79,27 +165,21 @@ function buildIssuesListQuery(query) {
   return {
     text: `
       SELECT
-        i.issue_id,
-        i.reported_by,
-        i.assigned_worker_id,
+        i.id,
+        i.user_id,
         i.title,
         i.description,
         i.category,
-        i.location,
+        i.building,
+        i.floor,
+        i.room,
+        i.image_url,
         i.status,
         i.created_at,
-        i.updated_at,
-        i.resolved_at,
-        (
-          SELECT p.photo_url
-          FROM issue_photos p
-          WHERE p.issue_id = i.issue_id
-          ORDER BY p.uploaded_at ASC
-          LIMIT 1
-        ) AS photo_url
+        i.updated_at
       FROM issues i
       ${whereClause}
-      ORDER BY ${sortColumn} ${sortOrder}, i.issue_id DESC
+      ORDER BY ${sortColumn} ${sortOrder}, i.id DESC
     `,
     values: params,
   };
@@ -151,6 +231,9 @@ async function getIssueComments(issueId) {
   }
 }
 
+// POST /api/issues — community members submit issues
+router.post('/', authenticate, requireRole('community_member'), createIssue);
+
 // GET /api/issues
 // Facility managers can view and filter all submitted issues.
 router.get('/', authenticate, async (req, res) => {
@@ -187,7 +270,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/issues/my
+// GET /api/issues/my — register before GET /:id
 // Community member can view only the issues they submitted.
 router.get('/my', authenticate, async (req, res) => {
   try {
@@ -200,26 +283,20 @@ router.get('/my', authenticate, async (req, res) => {
     const result = await db.query(
       `
       SELECT
-        i.issue_id,
-        i.reported_by,
-        i.assigned_worker_id,
+        i.id,
+        i.user_id,
         i.title,
         i.description,
         i.category,
-        i.location,
+        i.building,
+        i.floor,
+        i.room,
+        i.image_url,
         i.status,
         i.created_at,
-        i.updated_at,
-        i.resolved_at,
-        (
-          SELECT p.photo_url
-          FROM issue_photos p
-          WHERE p.issue_id = i.issue_id
-          ORDER BY p.uploaded_at ASC
-          LIMIT 1
-        ) AS photo_url
+        i.updated_at
       FROM issues i
-      WHERE i.reported_by = $1
+      WHERE i.user_id = $1
       ORDER BY i.created_at DESC
       `,
       [req.user.id]
@@ -231,11 +308,52 @@ router.get('/my', authenticate, async (req, res) => {
       data: result.rows.map(formatIssue),
     });
   } catch (error) {
-    console.error('get my issues error:', error);
+    console.error('get my issues error:', error.message, error.code, error.detail);
 
     return res.status(500).json({
       message: 'Could not load your issues.',
     });
+  }
+});
+
+// GET /api/issues/assigned
+// Workers can view only issues assigned to their account.
+router.get('/assigned', authenticate, requireRole('worker'), async (req, res) => {
+  try {
+    const result = await db.query(
+      `
+      SELECT
+        i.id,
+        i.user_id,
+        i.assigned_worker_id,
+        i.title,
+        i.description,
+        i.category,
+        i.building,
+        i.floor,
+        i.room,
+        i.image_url,
+        i.status,
+        i.created_at,
+        i.updated_at
+      FROM issues i
+      WHERE i.assigned_worker_id = $1
+      ORDER BY i.created_at DESC
+      `,
+      [req.user.id],
+    );
+
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows.map(formatIssue),
+    });
+  } catch (error) {
+    if (isMissingColumn(error, 'assigned_worker_id')) {
+      return missingAssignmentSupport(res);
+    }
+    console.error('get assigned issues error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not load assigned issues.' });
   }
 });
 
@@ -248,19 +366,20 @@ router.get('/:id', authenticate, async (req, res) => {
     const result = await db.query(
       `
       SELECT
-        issue_id,
-        reported_by,
-        assigned_worker_id,
+        id,
+        user_id,
         title,
         description,
         category,
-        location,
+        building,
+        floor,
+        room,
+        image_url,
         status,
         created_at,
-        updated_at,
-        resolved_at
+        updated_at
       FROM issues
-      WHERE issue_id = $1
+      WHERE id = $1
       `,
       [issueId]
     );
@@ -272,18 +391,9 @@ router.get('/:id', authenticate, async (req, res) => {
     }
 
     const issue = result.rows[0];
-
-    const isOwner =
-      req.user.role === 'community_member' &&
-      String(issue.reported_by) === String(req.user.id);
-
-    const isAssignedWorker =
-      req.user.role === 'worker' &&
-      String(issue.assigned_worker_id) === String(req.user.id);
-
-    const isManager = isManagerRole(req.user);
-
-    if (!isOwner && !isAssignedWorker && !isManager) {
+    const allowed = await ensureIssueAccess(req, res, issue);
+    if (allowed === null) return;
+    if (!allowed) {
       return res.status(403).json({
         message: 'You are not allowed to view this issue.',
       });
@@ -301,11 +411,268 @@ router.get('/:id', authenticate, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('get issue details error:', error);
+    console.error('get issue details error:', error.message, error.code, error.detail);
 
     return res.status(500).json({
       message: 'Could not load issue details.',
     });
+  }
+});
+
+// PUT /api/issues/:id/status
+// Managers can set any supported status; assigned workers can mark their work in progress.
+router.put('/:id/status', authenticate, async (req, res) => {
+  try {
+    const issueId = req.params.id;
+    const nextStatus = normalizeIssueStatus(req.body.status);
+
+    if (!nextStatus) {
+      return res.status(400).json({
+        message: 'Status must be Pending, In Progress, or Resolved.',
+      });
+    }
+
+    const issueResult = await db.query(
+      'SELECT id, user_id, status FROM issues WHERE id = $1',
+      [issueId],
+    );
+
+    if (issueResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Issue not found.' });
+    }
+
+    const issue = issueResult.rows[0];
+    if (!isManagerRole(req.user)) {
+      if (req.user.role !== 'worker' || nextStatus !== 'In Progress') {
+        return res.status(403).json({ message: 'You are not allowed to update this status.' });
+      }
+
+      const allowed = await ensureIssueAccess(req, res, issue);
+      if (allowed === null) return;
+      if (!allowed) {
+        return res.status(403).json({ message: 'You are not assigned to this issue.' });
+      }
+    }
+
+    const updateResult = await db.query(
+      `
+      UPDATE issues
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING
+        id,
+        user_id,
+        title,
+        description,
+        category,
+        building,
+        floor,
+        room,
+        image_url,
+        status,
+        created_at,
+        updated_at
+      `,
+      [nextStatus, issueId],
+    );
+
+    return res.json({
+      success: true,
+      message: 'Issue status updated.',
+      data: formatIssue(updateResult.rows[0]),
+    });
+  } catch (error) {
+    console.error('update issue status error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not update issue status.' });
+  }
+});
+
+// PUT /api/issues/:id/assign
+router.put('/:id/assign', authenticate, requireRole('facility_manager', 'admin'), async (req, res) => {
+  try {
+    const issueId = req.params.id;
+    const workerId = req.body.workerId ?? req.body.worker_id;
+
+    if (!workerId || !String(workerId).trim()) {
+      return res.status(400).json({ message: 'Worker id is required.' });
+    }
+
+    const workerResult = await db.query(
+      'SELECT id, role FROM users WHERE id = $1',
+      [workerId],
+    );
+
+    if (workerResult.rows.length === 0 || workerResult.rows[0].role !== 'worker') {
+      return res.status(400).json({ message: 'Assigned user must exist with worker role.' });
+    }
+
+    const updateResult = await db.query(
+      `
+      UPDATE issues
+      SET assigned_worker_id = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING
+        id,
+        user_id,
+        assigned_worker_id,
+        title,
+        description,
+        category,
+        building,
+        floor,
+        room,
+        image_url,
+        status,
+        created_at,
+        updated_at
+      `,
+      [workerId, issueId],
+    );
+
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Issue not found.' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Issue assigned.',
+      data: formatIssue(updateResult.rows[0]),
+    });
+  } catch (error) {
+    if (isMissingColumn(error, 'assigned_worker_id')) {
+      return missingAssignmentSupport(res);
+    }
+    console.error('assign issue error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not assign issue.' });
+  }
+});
+
+// PUT /api/issues/:id/close
+router.put('/:id/close', authenticate, requireRole('facility_manager', 'admin'), async (req, res) => {
+  try {
+    const issueId = req.params.id;
+    const issueResult = await db.query(
+      'SELECT id, user_id, status FROM issues WHERE id = $1',
+      [issueId],
+    );
+
+    if (issueResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Issue not found.' });
+    }
+
+    if (issueResult.rows[0].status !== 'Resolved') {
+      return res.status(400).json({ message: 'Only resolved issues can be closed.' });
+    }
+
+    const updateResult = await db.query(
+      `
+      UPDATE issues
+      SET status = 'Resolved', updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id,
+        user_id,
+        title,
+        description,
+        category,
+        building,
+        floor,
+        room,
+        image_url,
+        status,
+        created_at,
+        updated_at
+      `,
+      [issueId],
+    );
+
+    return res.json({
+      success: true,
+      message: 'Resolved issue closed.',
+      data: formatIssue(updateResult.rows[0]),
+    });
+  } catch (error) {
+    console.error('close issue error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not close issue.' });
+  }
+});
+
+// POST /api/issues/:id/comments
+router.post('/:id/comments', authenticate, requireRole('worker'), async (req, res) => {
+  try {
+    const issueId = req.params.id;
+    const commentText = String(req.body.comment || req.body.text || '').trim();
+
+    if (!commentText) {
+      return res.status(400).json({ message: 'Comment text is required.' });
+    }
+
+    const issueResult = await db.query(
+      'SELECT id, user_id FROM issues WHERE id = $1',
+      [issueId],
+    );
+
+    if (issueResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Issue not found.' });
+    }
+
+    const allowed = await ensureIssueAccess(req, res, issueResult.rows[0]);
+    if (allowed === null) return;
+    if (!allowed) {
+      return res.status(403).json({ message: 'You are not assigned to this issue.' });
+    }
+
+    const commentResult = await db.query(
+      `
+      INSERT INTO comments (issue_id, worker_id, comment_text)
+      VALUES ($1, $2, $3)
+      RETURNING
+        comment_id AS id,
+        worker_id AS "workerId",
+        comment_text AS text,
+        created_at AS "createdAt"
+      `,
+      [issueId, req.user.id, commentText],
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Comment added.',
+      data: commentResult.rows[0],
+    });
+  } catch (error) {
+    if (error?.code === '42P01') {
+      return missingCommentsSupport(res);
+    }
+    if (isMissingColumn(error, 'assigned_worker_id')) {
+      return missingAssignmentSupport(res);
+    }
+    console.error('add comment error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not add comment.' });
+  }
+});
+
+// POST /api/issues/:id/photo
+router.post('/:id/photo', authenticate, requireRole('worker'), async (req, res) => {
+  return missingPhotoSupport(res);
+});
+
+// DELETE /api/issues/:id
+router.delete('/:id', authenticate, requireRole('facility_manager', 'admin'), async (req, res) => {
+  try {
+    const result = await db.query(
+      'DELETE FROM issues WHERE id = $1 RETURNING id',
+      [req.params.id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Issue not found.' });
+    }
+
+    return res.json({ success: true, message: 'Issue deleted.' });
+  } catch (error) {
+    console.error('delete issue error:', error.message, error.code, error.detail);
+    return res.status(500).json({ message: 'Could not delete issue.' });
   }
 });
 

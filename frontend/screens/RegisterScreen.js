@@ -11,7 +11,7 @@ import {
   Alert,
   ScrollView,
 } from 'react-native';
-import { saveSession, registerRequest } from '../services/api';
+import { clearSession, registerRequest } from '../services/api';
 
 const ROLES = [
   { value: 'community_member', label: 'Community member' },
@@ -20,7 +20,7 @@ const ROLES = [
   { value: 'admin', label: 'Admin' },
 ];
 
-export default function RegisterScreen({ navigation, onAuthSuccess }) {
+export default function RegisterScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -43,9 +43,11 @@ export default function RegisterScreen({ navigation, onAuthSuccess }) {
 
     setLoading(true);
     try {
-      const { token, user } = await registerRequest(email.trim(), password, role);
-      await saveSession(token, user);
-      onAuthSuccess(user);
+      await registerRequest(email, password, role);
+      await clearSession();
+      navigation.navigate('Login', {
+        email: email.trim().toLowerCase(),
+      });
     } catch (e) {
       Alert.alert('Registration failed', e.message || 'Please try again.');
     } finally {

@@ -29,6 +29,12 @@ export default function CommunityDashboard({ navigation, onLogout }) {
         <Text style={styles.primaryButtonText}>Submit an issue</Text>
       </TouchableOpacity>
       <TouchableOpacity
+        style={styles.secondaryButton}
+        onPress={() => navigation.navigate('MyIssues')}
+      >
+        <Text style={styles.secondaryButtonText}>My issues</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
         style={[styles.button, loading && styles.buttonDisabled]}
         onPress={handleLogout}
         disabled={loading}
@@ -56,6 +62,17 @@ const styles = StyleSheet.create({
     maxWidth: 280,
   },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  secondaryButton: {
+    backgroundColor: '#fff',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 16,
+    maxWidth: 280,
+    borderWidth: 1,
+    borderColor: '#2d6cdf',
+  },
+  secondaryButtonText: { color: '#2d6cdf', fontSize: 16, fontWeight: '600' },
   button: {
     backgroundColor: '#c0392b',
     paddingVertical: 14,
